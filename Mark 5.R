@@ -31,7 +31,6 @@ plotD3bn <- function(bn) {
 
 df <- read_csv("D:\\Trintiy\\Senior Sophister\\Semester 2\\Data Analysis\\Assignment\\flchain\\flchain.csv")
 head(df)
-df <- df[,-1]
 
 # Convert character variables to factors
 df$sex <- ifelse(df$sex == "M", 1, ifelse(df$sex == "F", 2, df$sex))
@@ -40,23 +39,44 @@ df$sex <- as.numeric(as.character(df$sex))
 #df$chapter <- as.factor(df$chapter)
 df$flc.grp <- as.factor(df$flc.grp)
 df$death <- as.numeric(df$death)
+new = df[-27,]
+df = new[,-c(1,8,9)]
 
 dataset <- df
+rows <- numeric(nrow(dataset))
 
 # Initialise a vector to hold the survival probabilities
-observedTimes <- numeric(nrow(dataset))
+observedTimes <- rows
+observedDeaths <- rows
+ageBucketed <- rows
 head(dataset)
 
-#tau=500 #was 200 last paper idk if better or not tbh
+tau=4500 # Censoredpast this
 
 # Loop over each row in the dataset
 for(i in 1:nrow(dataset)) {
-  observedTime = dataset[i, 9]
+  obs = dataset[i,]
+  observedTime = obs$futime
+  observedDeath = obs$death
+  if (observedTime>tau)
+  {
+    observedTime=tau
+    observedDeath=0
+  }
+  if (observedTime<tau && obs$death==0)
+  {
+    observedTime=0
+    observedDeath=0
+  }
+  ageBucketed[i] <- cut(obs$age, breaks = seq(50, 100, by = 5), include.lowest = TRUE, right = FALSE)
   observedTimes[i] <- observedTime
+  observedDeaths[i] <- observedDeath
 }
 
-# Add the survival probabilities as a new column in the myeloid dataset
+# Add the survival probabilities as a new column
 dataset$observedTimes <- observedTimes
+dataset$observedDeaths <- observedDeaths
+dataset$ageBucketed <- ageBucketed
 
 survivalObj <- Surv(time = dataset$futime, event = dataset$death)
 KMSurvModel <- survfit(survivalObj ~ dataset$flc.grp, data = dataset, type="kaplan-meier")
@@ -115,9 +135,15 @@ dataset$observedProbs <- observedProbs
 dataset <- dataset %>%
   mutate(weights = ifelse(observedTimes != 0,(1/observedProbs), 0))
 
-datasetW = dataset[,-c(3:5, 7:9, 11:14)]
+############################
+#Old
+
+###############
+datasetW = dataset[,c(2,6,12,8, 14)]
+write.csv(datasetW, file = "dataFromR.csv")
+datasetW = dataset[,c(2,6,12,8)]
 weights <- dataset$weights +1
-datasetW$age <- weights*datasetW$age
+datasetW$ageBucketed <- weights*datasetW$ageBucketed
 datasetW$sex <- weights*datasetW$sex
   
 bn <- hc(datasetW)
@@ -125,7 +151,117 @@ bn <- hc(datasetW)
 plot(bn)
 
 # Convert all integer columns to numeric
-#datasetW[] <- lapply(datasetW, function(x) as.numeric(as.character(x)))
-fitted <- bn.fit(bn, datasetW)
+datasetW[] <- lapply(datasetW, function(x) as.numeric(as.character(x)))
+fitted <- bn.fit(bn, datasetW, weights=weights)
 
 plotD3bn(bn)
+
+
+# Resample the data according to the weights
+resampled_samples <- samples[sample(nrow(samples), size = sum(weights), replace = TRUE, prob = weights), ]
+
+# Now fit the network with the resampled data
+bn <- bn.fit(bn, data = resampled_samples)
+
+
+
+##############################
+# New Code
+#############################
+
+
+
+pvec_zi_given_alive = numeric(ncol(datasetW)-1)
+
+for (i in 1:(3))
+{
+  for (level in 1:(2)) #Sex
+  {
+      sum = 0 
+      for (j in 1:nrow(datasetW))
+      {
+        if( datasetW[j, 4] == 0 )
+        {
+          if(datasetW[j,i]  == level){ sum = sum + 1}
+        }
+      } 
+  }
+}
+
+# change the numbers to suit whatever col the nodes correspond to 
+nodes = c(1,2,3) # sex, grp, age
+numCategNode = c(2,2,10)
+
+
+### corresp to Eq 14
+P_ziGivenDoA <- function(i, statusDoA)
+{
+  e = statusDoA # dead or alive
+  sum1 = 0
+  
+  pVec = zeros(numCategNode[i])
+  
+  # get numerator
+  for (level in 1:numCategNode[i])
+  {
+    sum1 = 0
+    for (j in 1:n)
+    {
+      if((datasetW[j,4] == e)  && (datasetW[j,i] == e)){ sum1 = sum1 + datasetW[j,5]}
+    }
+    pvec[level] <- sum1 
+  }
+  
+  # get denominator
+  sum2 = 0
+  for (j in 1:n)
+  {
+    if (datasetW[j,i] == e) { sum2 = sum2 + datasetW[j,5]} 
+  }   
+  
+  pvec <- pvec / sum2
+  return(pvec)
+}
+
+
+library(reticulate)
+use_condaenv("DAProject", required = TRUE)
+
+pomegranate <- import("pomegranate")
+BayesianNetwork <- pomegranate$BayesianNetwork$from_samples
+
+model <- pomegranate$BayesianNetwork$from_samples(datasetW, weights=weights, algorithm = 'exact')
+
+# Resample the data according to the weights
+resampled_samples <- datasetW[sample(nrow(datasetW), size = sum(weights), replace = TRUE, prob = weights)]
+
+bn <- hc(datasetW)
+
+# Now fit the network with the resampled data
+bn <- bn.fit(bn, data = resampled_samples)
+
+plotD3bn(bn)
+
+
+
+###############################
+#Other New
+
+#########################
+
+
+datasetW = dataset[,c(2,6,12,8)]
+weights <- dataset$weights
+
+# Resample the data according to the weights
+resampled_samples <- datasetW[sample(nrow(datasetW), size = sum(weights), replace = TRUE, prob = weights), ]
+
+datasetW[] <- lapply(datasetW, function(x) as.numeric(as.character(x)))
+
+dag <- model2network("[sex][flc.grp][ageBucketed|sex:flc.grp][death|sex:flc.grp:ageBucketed]")
+
+# Now fit the network with the resampled data
+bn <- bn.fit(dag, data = resampled_samples)
+
+plotD3bn(bn)
+
