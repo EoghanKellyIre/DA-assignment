@@ -165,10 +165,6 @@ bn <- bn.fit(bn, data = resampled_samples)
 
 
 
-##############################
-# New Code
-#############################
-
 
 
 pvec_zi_given_alive = numeric(ncol(datasetW)-1)
@@ -245,7 +241,7 @@ plotD3bn(bn)
 
 
 ###############################
-#Other New
+#New
 
 #########################
 
@@ -253,15 +249,64 @@ plotD3bn(bn)
 datasetW = dataset[,c(2,6,12,8)]
 weights <- dataset$weights
 
+datasetW[] <- lapply(datasetW, function(x) as.numeric(as.character(x)))
+
 # Resample the data according to the weights
 resampled_samples <- datasetW[sample(nrow(datasetW), size = sum(weights), replace = TRUE, prob = weights), ]
-
-datasetW[] <- lapply(datasetW, function(x) as.numeric(as.character(x)))
 
 dag <- model2network("[sex][flc.grp][ageBucketed|sex:flc.grp][death|sex:flc.grp:ageBucketed]")
 
 # Now fit the network with the resampled data
-bn <- bn.fit(dag, data = resampled_samples)
+bnIPWC <- bn.fit(dag, data = resampled_samples)
 
 plotD3bn(bn)
+
+#IF no weights
+
+oldData <- dataset[,c(2,6,8, 12)]
+
+bnNoWeights <- hc(oldData)
+
+plot(bnNoWeights)
+plotD3bn(bnNoWeights)
+
+#IF remove censoring
+
+datasetNoCensored= dataset[dataset['weights'] != 0,]
+
+datasetNoCensored <- datasetNoCensored[,c(2,6,8, 12)]
+
+bnNoCensored <- hc(datasetNoCensored)
+
+plot(bnNoCensored)
+plotD3bn(bnNoCensored)
+
+bn_structure = bn.net(bnIPWC)
+compare(bn_structure, bnNoCensored, arcs = TRUE)
+#############################
+#Cross Fold validation
+#############################
+
+# Load the caret package
+library(caret)
+
+# Set a seed for reproducibility
+set.seed(123)
+
+# Create 5 folds
+folds <- createFolds(resampled_samples$death, k = 5)
+
+for (i in 1:length(folds)) {
+  
+  # Split the data into training and test sets
+  train_data <- resampled_samples[,-folds[[i]]]
+  test_data  <- resampled_samples[,folds[[i]]]
+  
+  # Fit the model on the training data
+  dag <- model2network("[sex][flc.grp][ageBucketed|sex:flc.grp][death|sex:flc.grp:ageBucketed]")
+  bnIPWC <- bn.fit(dag, data = train_data)
+  
+  #prediction function here
+  #MSPE
+}
 
