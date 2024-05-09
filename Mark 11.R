@@ -21,32 +21,6 @@ library(ggsurvfit)
 # Set a seed for reproducibility
 set.seed(123)
 
-#from paper
-plotD3bn <- function(bn) {
-  varNames <- nodes(bn)
-  # Nodes should be zero indexed!
-  links <- data.frame(arcs(bn)) %>%
-    mutate(from = match(from, varNames)-1, to = match(to, varNames)-1, value = 1)
-  
-  nodes <- data.frame(name = varNames) %>%
-    mutate(group = 1, size = 30)
-  
-  networkD3::forceNetwork(
-    Links = links,  
-    Nodes = nodes,
-    Source = "from",
-    Target = "to",
-    Value = "value",
-    NodeID = "name",
-    Group = "group",
-    fontSize = 20,
-    zoom = TRUE,
-    arrows = TRUE,
-    bounded = TRUE,
-    opacityNoHover = 1
-  )
-}
-
 ########################
 #
 # Loading Data
@@ -185,8 +159,6 @@ dag <- model2network("[kappa][lambda][sex][flc.grp|sex:age:lambda:kappa][age][ob
 # Now fit the network with the resampled data
 bnIPCW <- bn.fit(dag, data = resampled_samples)
 
-plotD3bn(bnIPCW)
-
 # Create 5 folds
 folds <- createFolds(resampled_samples$observedDeaths, k = 5)
 total_cvmspe <- 0
@@ -210,8 +182,6 @@ x
 #IF no weights
 
 bnNoWeights <- bn.fit(dag, data = datasetW)
-
-plotD3bn(bnNoWeights)
 
 # Create 5 folds
 folds <- createFolds(datasetW$observedDeaths, k = 5)
@@ -240,7 +210,6 @@ datasetNoCensored <- datasetNoCensored[,c(1:5,9)]
 datasetNoCensored[] <- lapply(datasetNoCensored, function(x) as.numeric(x))
 datasetNoCensored$sex <- as.factor(datasetNoCensored$sex)
 bnNoCensored <- bn.fit(dag, data = datasetNoCensored)
-plotD3bn(bnNoCensored)
 
 # Create 5 folds
 folds <- createFolds(datasetW$flc.grp, k = 5)
