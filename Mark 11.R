@@ -52,26 +52,15 @@ plotD3bn <- function(bn) {
 # Loading Data
 #
 ########################
-
-df <- read_csv("D:\\Trintiy\\Senior Sophister\\Semester 2\\Data Analysis\\Assignment\\flchain\\flchain.csv")
-head(df)
-
-#plot(df$death, df$futime)
-#cor.test(df$death, df$futime)
-
-# Convert character variables to factors
-df$sex <- ifelse(df$sex == "M", 1, ifelse(df$sex == "F", 2, df$sex))
-df$sex <- as.numeric(as.character(df$sex))
-#df$chapter <- ifelse(df$death == 0, 'Not Dead', df$chapter)
-#df$chapter <- as.factor(df$chapter)
+# Load the data
+data(flchain, package="survival")
+df <- flchain
 df$flc.grp <- as.factor(df$flc.grp)
 df$death <- as.numeric(df$death)
-new = df[-27,]
-df = new[,-c(1,8,9)]
-
+df = df[-27,]
+df = df[,-c(3,7,8,11)]
 dataset <- df
 rows <- numeric(nrow(dataset))
-
 ########################
 #
 # Getting IPWC Weights
@@ -81,51 +70,47 @@ rows <- numeric(nrow(dataset))
 # Initialise a vector to hold the survival probabilities
 observedTimes <- rows
 observedDeaths <- rows
-ageBucketed <- rows
 head(dataset)
 
-tau=4600 # Censoredpast this
+tau=4600 # Censored past this
 
-# Loop over each row in the dataset
+# Getting the observedTime and observedDeath
 for(i in 1:nrow(dataset)) {
   obs = dataset[i,]
   observedTime = obs$futime
   observedDeath = obs$death
   if (observedTime>tau)
+    # If they died or are alive past tau, they are censored at tau.
+    # They are observed alive at tao and their time is tau.
   {
     observedTime=tau
     observedDeath=0
   }
   if (observedTime<tau && obs$death==0)
+    # If they are alive before tau but left the study they are censored at their futime.
+    # They are observed alive at their futime and their observed time is their futime.
   {
     observedTime=observedTime
     observedDeath=0
   }
   if (observedTime<tau && obs$death==1)
+    # If they are dead before tau, they are not censored.
+    # They are observed dead at their futime and their observed time is their futime.
   {
-    observedTime=1
+    observedTime=observedTime
     observedDeath=1
   }
-  ageBucketed[i] <- cut(obs$age, breaks = seq(50, 100, by = 5), include.lowest = TRUE, right = FALSE)
   observedTimes[i] <- observedTime
   observedDeaths[i] <- observedDeath
 }
 
-# Add the survival probabilities as a new column
+# Add the observedTimes and observedDeaths as a new column
 dataset$observedTimes <- observedTimes
 dataset$observedDeaths <- observedDeaths
-dataset$ageBucketed <- ageBucketed
 
+# Find survival probabilities
 survivalObj <- Surv(time = dataset$futime, event = dataset$death)
 KMSurvModel <- survfit(survivalObj ~ dataset$flc.grp, data = dataset, type="kaplan-meier")
-#pdf("kaplan-meier.pdf", width = 10, height = 10)
-survfit(survivalObj ~ dataset$flc.grp, data = dataset, type="kaplan-meier") %>% 
-  ggsurvfit() +
-  labs(
-    x = "Days",
-    y = "Overall survival probability"
-  ) + add_confidence_interval()
-#dev.off()
 
 # Get the number of groups
 num_groups <- length(levels(dataset$flc.grp))
@@ -140,6 +125,7 @@ for (i in 1:num_groups) {
   survivalTimesList[[i]] <- KMSurvModel$time[currentStart:(currentStart - 1 + KMSurvModel[["strata"]][paste0("dataset$flc.grp=", i)])]
   survivalProbsList[[i]] <- KMSurvModel$surv[currentStart:(currentStart - 1 + KMSurvModel[["strata"]][paste0("dataset$flc.grp=", i)])]
   currentStart = currentStart + KMSurvModel[["strata"]][paste0("dataset$flc.grp=", i)]
+  
   # Add a time point of 0 with a survival probability of 1 at the start
   survivalTimesList[[i]] <- c(0, survivalTimesList[[i]])
   survivalProbsList[[i]] <- c(1, survivalProbsList[[i]])
@@ -162,40 +148,39 @@ for (i in 1:nrow(dataset)) {
   
   # Get the corresponding survival probability
   observedProbs[i] <- survivalProbs[maxSurvivalTimeIndex]
+  if(dataset$observedDeath[i]==1)
+    #If they are not censored their probability of them being uncensored (i.e., the event occurring) is 1
+  {
+    observedProbs[i] <- 1
+  }
 }
 
 # Add the survival probabilities as a new column in the dataset
 dataset$observedProbs <- observedProbs
 
+#Getting the inverse probabilities for the weights
 dataset <- dataset %>%
   mutate(weights = ifelse(observedTimes != 0,(1/observedProbs), 0))
 
 ########################
 #
-# Get the BN for IPCW
+# BNs 5 fold cross validation
 #
 ########################
 
 #BN IPCW
 
-datasetW = dataset[,c(2,4,5,6,12,11)]
+datasetW = dataset[,c(1:5,9)]
 weights <- (dataset$weights)
 
-#datasetW$sex <- as.numeric(datasetW$sex)
-#datasetW$ageBucketed <- as.numeric(datasetW$ageBucketed)
-
-# Convert the rest to numeric
-#datasetW$kappa <- as.numeric(datasetW$kappa)
-#datasetW$lambda <- as.numeric(datasetW$lambda)
-#datasetW$flc.grp <- as.numeric(datasetW$flc.grp)
-#datasetW$death <- as.numeric(datasetW$death)
-
 datasetW[] <- lapply(datasetW, function(x) as.numeric(x))
+datasetW$sex <- as.factor(datasetW$sex)
 
 # Resample the data according to the weights
 resampled_samples <- datasetW[sample(nrow(datasetW), size = sum(weights), replace = TRUE, prob = weights), ]
 
-dag <- model2network("[kappa][lambda][sex][flc.grp|sex:ageBucketed:lambda:kappa][ageBucketed][observedDeaths|sex:flc.grp:ageBucketed]")
+#Defining the DAG
+dag <- model2network("[kappa][lambda][sex][flc.grp|sex:age:lambda:kappa][age][observedDeaths|sex:flc.grp:age]")
 
 # Now fit the network with the resampled data
 bnIPCW <- bn.fit(dag, data = resampled_samples)
@@ -205,7 +190,6 @@ plotD3bn(bnIPCW)
 # Create 5 folds
 folds <- createFolds(resampled_samples$observedDeaths, k = 5)
 total_cvmspe <- 0
-#dag <- model2network("[sex][flc.grp|sex:ageBucketed][ageBucketed|sex][death|sex:flc.grp:ageBucketed]")
 
 for (i in 1:length(folds)) {
   # Split the data into training and test sets
@@ -216,7 +200,7 @@ for (i in 1:length(folds)) {
   bn <- bn.fit(dag, data = train_data)
   
   # Predict the test data and calculate the mean squared prediction error
-  pred <- predict(bn, node = "observedDeaths", data = test_data, method = "exact")
+  pred <- predict(bn, node = "observedDeaths", data = test_data)
   cvmspe <- mean((pred - test_data$observedDeaths)^2)
   total_cvmspe <- total_cvmspe + cvmspe
 }
@@ -225,27 +209,24 @@ x
 
 #IF no weights
 
-oldData <- dataset[,c(2,4,5,6,12,11)]
-oldData[] <- lapply(oldData, function(x) as.numeric(as.character(x)))
-bnNoWeights <- bn.fit(dag, data = oldData)
+bnNoWeights <- bn.fit(dag, data = datasetW)
 
-#plot(bnNoWeights)
 plotD3bn(bnNoWeights)
 
 # Create 5 folds
-folds <- createFolds(oldData$observedDeaths, k = 5)
+folds <- createFolds(datasetW$observedDeaths, k = 5)
 total_cvmspe <- 0
 for (i in 1:length(folds)) {
   
   # Split the data into training and test sets
-  train_data <- oldData[-folds[[i]],]
-  test_data  <- oldData[folds[[i]],]
+  train_data <- datasetW[-folds[[i]],]
+  test_data  <- datasetW[folds[[i]],]
   
   # Fit the model on the training data
   bn <- bn.fit(dag, data = train_data)
   
   # Predict the test data and calculate the mean squared prediction error
-  pred <- predict(bn, node = "observedDeaths", data = test_data, method = "exact")
+  pred <- predict(bn, node = "observedDeaths", data = test_data)
   cvmspe <- mean((pred - test_data$observedDeaths)^2)
   total_cvmspe <- total_cvmspe + cvmspe
 }
@@ -254,31 +235,28 @@ x
 
 #IF remove censoring
 
-datasetNoCensored= dataset[dataset['weights'] != 0,]
-datasetNoCensored <- datasetNoCensored[,c(2,4,5,6,12,11)]
-datasetNoCensored[] <- lapply(datasetNoCensored, function(x) as.numeric(as.character(x)))
-
+datasetNoCensored= dataset[dataset$observedDeaths == 1,]
+datasetNoCensored <- datasetNoCensored[,c(1:5,9)]
+datasetNoCensored[] <- lapply(datasetNoCensored, function(x) as.numeric(x))
+datasetNoCensored$sex <- as.factor(datasetNoCensored$sex)
 bnNoCensored <- bn.fit(dag, data = datasetNoCensored)
-
-#plot(bnNoCensored)
 plotD3bn(bnNoCensored)
 
 # Create 5 folds
-folds <- createFolds(datasetNoCensored$observedDeaths, k = 5)
+folds <- createFolds(datasetW$flc.grp, k = 5)
 total_cvmspe <- 0
-#dag <- model2network("[sex][flc.grp][ageBucketed|sex:flc.grp][death|sex:flc.grp:ageBucketed]")
 
 for (i in 1:length(folds)) {
   
   # Split the data into training and test sets
-  train_data <- datasetNoCensored[-folds[[i]],]
-  test_data  <- datasetNoCensored[folds[[i]],]
+  train_data <- datasetW[-folds[[i]],]
+  test_data  <- datasetW[folds[[i]],]
   
   # Fit the model on the training data
   bn <- bn.fit(dag, data = train_data)
   
   # Predict the test data and calculate the mean squared prediction error
-  pred <- predict(bn, node = "observedDeaths", data = test_data, method = "exact")
+  pred <- predict(bn, node = "observedDeaths", data = test_data)
   cvmspe <- mean((pred - test_data$observedDeaths)^2)
   total_cvmspe <- total_cvmspe + cvmspe
 }
@@ -287,22 +265,21 @@ x
 
 ########################
 #
-# Comparing BNs
+# Plotting
 #
 ########################
-
-bn_structure_IPCW = bn.net(bnIPCW)
-bn_structure_NoCensored = bn.net(bnNoCensored)
-bn_structure_NoWeights = bn.net(bnNoWeights)
-
-compare(bn_structure_IPCW, bn_structure_NoCensored, arcs = TRUE)
-hamming(bn_structure_IPCW,bn_structure_NoCensored)
 
 pdf("DAG.pdf", width = 10, height = 10)
 dag <- model2network("[Kappa][Lambda][Sex][FLC Group|Sex:Age:Lambda:Kappa][Age][Observed Deaths|Sex:FLC Group:Age]")
 plot(dag)
 dev.off()
 
-pdf("DAG2.pdf", width = 10, height = 10)
-plotD3bn(dag)
-dev.off()
+#Plotting curves
+#pdf("kaplan-meier.pdf", width = 10, height = 10)
+survfit(survivalObj ~ dataset$flc.grp, data = dataset, type="kaplan-meier") %>% 
+  ggsurvfit() +
+  labs(
+    x = "Days",
+    y = "Overall survival probability"
+  ) + add_confidence_interval()
+#dev.off()
